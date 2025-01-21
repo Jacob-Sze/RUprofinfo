@@ -18,19 +18,37 @@ import multiprocessing
 from multiprocessing import Pool, Array, Lock
 
 
-class Professors:
-  def __init__(self, name, difficulty, quality):
-    self.name = name
-    self.dup = 1
-    self.difficulty = Decimal(difficulty)
-    self.quality = Decimal(quality)
-    self.reviews = {}
-
 class Review:
-  def __init__(self, quality, difficulty, text):
-    self.quality = quality
-    self.difficutly = difficulty
-    self.text = text   
+    def __init__(self, quality, difficulty, text):
+        self.quality = Decimal(quality)
+        self.difficulty = Decimal(difficulty)
+        self.text = text
+
+    def to_dict(self):
+        return {
+            'quality': float(self.quality), 
+            'difficulty': float(self.difficulty), 
+            'text': self.text
+        }
+
+class Professors:
+    def __init__(self, name, difficulty, quality, reviews):
+        self.name = name
+        self.dup = 1
+        self.difficulty = Decimal(difficulty)
+        self.quality = Decimal(quality)
+        self.reviews = reviews
+
+    def to_dict(self):
+        reviews_dict = {key: review.to_dict() for key, review in enumerate(self.reviews)}
+        return {
+            'name': self.name,
+            'dup': self.dup,
+            'difficulty': float(self.difficulty), 
+            'quality': float(self.quality),  
+            'reviews': reviews_dict
+        }
+
 
 def fetch_and_process_courses(subject_codes, semester, campus, level):
     base_url = "https://sis.rutgers.edu/oldsoc/courses.json"
@@ -92,6 +110,10 @@ def fetch_professors(professor, professorStorage, mutex):
             ads[0].click()
         except:
             ads
+    num = driver.find_elements(By.CLASS_NAME, "fQdKxg")
+    if(num[0].get_attribute('innerHTML').find("No professor") != -1):
+        driver.quit()
+        return
     cards = driver.find_elements(By.CLASS_NAME, "dLJIlx")
     nameList = driver.find_elements(By.CLASS_NAME, "cJdVEK")
     links = set()
@@ -103,12 +125,15 @@ def fetch_professors(professor, professorStorage, mutex):
         else:
             break
     if(len(links) == 0):
+        driver.quit()
         return
     if(len(name)==1 and len(links)>= 2):
+        driver.quit()
         return
+    
     links = list(links)
     for i in range(0, len(links)):
-        driver.get(link)
+        driver.get(links[i])
         ads = driver.find_elements(By.CLASS_NAME, "bx-close")
         if(len(ads) > 0):
             try:
@@ -135,19 +160,21 @@ def fetch_professors(professor, professorStorage, mutex):
         reviewStorage = set()
         for i in range(0, len(reviews)):
             reviewStorage.add(Review(re.search(">...<", quality[i].get_attribute('innerHTML'))[0][1:4], difficulty[i].get_attribute('innerHTML'), reviews[i].get_attribute('innerHTML')))
+    
         checker = -1
         for i in range(0, len(professorStorage)):
             if(professor == professorStorage[i].name):
                 checker = i
                 break
-        with mutex:
-            if(checker != -1):
-                professorStorage[i].reviews = professorStorage[i].reviews.union(reviewStorage)
-                professorStorage[i].dup += 1
-                professorStorage[i].difficulty += Decimal(avgDiff)
-                professorStorage[i].quality += Decimal(avgQuality)
-            else:
-                professorStorage.append(Professors(professor, avgDiff, avgQuality))
+        mutex.acquire()
+        if(checker != -1):
+            professorStorage[i].reviews = professorStorage[i].reviews.union(reviewStorage)
+            professorStorage[i].dup += 1
+            professorStorage[i].difficulty += Decimal(avgDiff)
+            professorStorage[i].quality += Decimal(avgQuality)
+        else:
+            professorStorage.append(Professors(professor, avgDiff, avgQuality, reviewStorage))
+        mutex.release()
     driver.quit()
     return
 
@@ -160,6 +187,7 @@ def main():
     array = set()
     for object in subArray:
         array.add(object["professor"])
+    array = list(array)
     with multiprocessing.Manager() as manager:
         professorStorage = manager.list()
         lock = manager.Lock()
@@ -169,10 +197,10 @@ def main():
         for object in subArray:
             for objectTwo in professorStorage:
                 if(object["professor"] == objectTwo.name):
-                    object["professor"] = objectTwo
+                    object["professor"] = objectTwo.to_dict()
+                    break
     with open("RUprof.txt", "w") as fp:
         json.dump(subArray, fp, indent=4)
 
 if __name__ == '__main__':
     main()
-
